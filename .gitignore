@@ -1,0 +1,5 @@
+node_modules
+dist
+.vercel
+project_code.zip
+*.log
