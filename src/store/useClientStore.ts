@@ -47,6 +47,7 @@ export const useClientStore = create<ClientState>((set, get) => ({
       phone: clientData.phone || '',
       address: clientData.address || '',
       notes: clientData.notes || '',
+      measurements: clientData.measurements,
       createdAt: isEdit ? clientData.createdAt || now : now
     };
 

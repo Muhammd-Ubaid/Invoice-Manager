@@ -21,6 +21,29 @@ import { formatCurrency } from '../../utils/calculations';
 import { Client } from '../../types';
 import { TailorMeasurementView } from './TailorMeasurementView';
 
+const HighlightText: React.FC<{ text?: string; query: string }> = ({ text, query }) => {
+  if (!text) return null;
+  const trimmed = query.trim();
+  if (!trimmed) return <>{text}</>;
+
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === trimmed.toLowerCase() ? (
+          <mark key={i} className="bg-amber-200 dark:bg-amber-900/60 text-slate-900 dark:text-white rounded px-0.5 font-bold">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+};
+
 export const ClientListScreen: React.FC = () => {
   const { clients, openCreateClientModal, openEditClientModal, deleteClient } = useClientStore();
   const { invoices, openDetailModal } = useInvoiceStore();
@@ -31,12 +54,21 @@ export const ClientListScreen: React.FC = () => {
   const [selectedClientForMeasurements, setSelectedClientForMeasurements] = useState<Client | null>(null);
 
   const filteredClients = clients.filter((client) => {
-    const query = searchQuery.toLowerCase();
-    return (
-      client.name.toLowerCase().includes(query) ||
-      client.companyName.toLowerCase().includes(query) ||
-      client.email.toLowerCase().includes(query)
-    );
+    if (!searchQuery.trim()) return true;
+
+    const query = searchQuery.toLowerCase().trim();
+    const cleanQueryPhone = query.replace(/[\s\-\+\(\)]/g, '');
+
+    const nameMatch = (client.name || '').toLowerCase().includes(query);
+    const companyMatch = (client.companyName || '').toLowerCase().includes(query);
+    const emailMatch = (client.email || '').toLowerCase().includes(query);
+    const addressMatch = (client.address || '').toLowerCase().includes(query);
+
+    const rawPhone = (client.phone || '').toLowerCase();
+    const cleanPhone = rawPhone.replace(/[\s\-\+\(\)]/g, '');
+    const phoneMatch = rawPhone.includes(query) || (cleanQueryPhone.length > 0 && cleanPhone.includes(cleanQueryPhone));
+
+    return nameMatch || companyMatch || emailMatch || addressMatch || phoneMatch;
   });
 
   const getClientMetrics = (clientId: string) => {
@@ -110,11 +142,11 @@ export const ClientListScreen: React.FC = () => {
                       </div>
                       <div>
                         <h3 className="text-base font-bold text-slate-900 dark:text-white line-clamp-1">
-                          {client.name}
+                          <HighlightText text={client.name} query={searchQuery} />
                         </h3>
                         {client.companyName && (
                           <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            {client.companyName}
+                            <HighlightText text={client.companyName} query={searchQuery} />
                           </p>
                         )}
                       </div>
@@ -133,19 +165,25 @@ export const ClientListScreen: React.FC = () => {
                     {client.phone && (
                       <div className="flex items-center gap-2">
                         <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">{client.phone}</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">
+                          <HighlightText text={client.phone} query={searchQuery} />
+                        </span>
                       </div>
                     )}
                     {client.email && (
                       <div className="flex items-center gap-2">
                         <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="truncate">{client.email}</span>
+                        <span className="truncate">
+                          <HighlightText text={client.email} query={searchQuery} />
+                        </span>
                       </div>
                     )}
                     {client.address && (
                       <div className="flex items-start gap-2">
                         <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                        <span className="line-clamp-2">{client.address}</span>
+                        <span className="line-clamp-2">
+                          <HighlightText text={client.address} query={searchQuery} />
+                        </span>
                       </div>
                     )}
                   </div>
