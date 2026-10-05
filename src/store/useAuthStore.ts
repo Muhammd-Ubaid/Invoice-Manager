@@ -18,6 +18,15 @@ const ACTIVE_USER_KEY = 'invoice_manager_active_user';
 
 const DEMO_USERS: User[] = [
   {
+    id: 'user-arzo-admin',
+    email: 'arzotailor@gmail.com',
+    username: 'arzotailor',
+    displayName: 'Arzo Tailor',
+    password: 'Arzo123',
+    isEmailVerified: true,
+    isLoggedIn: false,
+  },
+  {
     id: 'user-01',
     email: 'owner@mybusiness.com',
     username: 'owner',
@@ -41,7 +50,18 @@ const loadRegisteredUsers = (): User[] => {
   try {
     const saved = localStorage.getItem(INITIAL_USERS_KEY);
     if (saved) {
-      return JSON.parse(saved);
+      const parsed: User[] = JSON.parse(saved);
+      const hasArzo = parsed.some(
+        (u) =>
+          (u.username && u.username.toLowerCase() === 'arzotailor') ||
+          u.email.toLowerCase() === 'arzotailor@gmail.com' ||
+          (u.displayName && u.displayName.toLowerCase() === 'arzo tailor')
+      );
+      if (!hasArzo) {
+        parsed.unshift(DEMO_USERS[0]);
+        localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(parsed));
+      }
+      return parsed;
     }
   } catch (e) {
     console.error('Failed to load registered users', e);
@@ -338,8 +358,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
           (u.displayName && u.displayName.toLowerCase() === query)
       );
 
-      if (!found && (!password || query === 'alex@luminastudio.dev' || query === 'owner@mybusiness.com')) {
-        found = DEMO_USERS.find((u) => u.email.toLowerCase() === query || u.username === query) || DEMO_USERS[0];
+      if (!found && (!password || query === 'alex@luminastudio.dev' || query === 'owner@mybusiness.com' || query === 'arzotailor' || query === 'arzo tailor' || query === 'arzotailor@gmail.com')) {
+        found = DEMO_USERS.find((u) => u.email.toLowerCase() === query || (u.username && u.username.toLowerCase() === query) || (u.displayName && u.displayName.toLowerCase() === query)) || DEMO_USERS[0];
       }
 
       if (!found) {
