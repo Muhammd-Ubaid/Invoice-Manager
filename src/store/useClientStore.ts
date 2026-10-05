@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { db } from '../db/database';
+import { db as dexieDb } from '../db/database';
+import { db as firebaseDb, auth, doc, setDoc, deleteDoc, collection, getDocs } from '../firebase';
 import { Client } from '../types';
 
 interface ClientState {
@@ -25,8 +26,29 @@ export const useClientStore = create<ClientState>((set, get) => ({
   selectedClient: null,
 
   loadClients: async () => {
-    const clients = await db.clients.toArray();
-    set({ clients });
+    // 1. Try local Dexie DB first
+    let localClients = await dexieDb.clients.toArray();
+    set({ clients: localClients });
+
+    // 2. Try Firestore if user is authenticated
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        const querySnapshot = await getDocs(collection(firebaseDb, 'users', currentUser.uid, 'clients'));
+        if (!querySnapshot.empty) {
+          const fsClients: Client[] = [];
+          querySnapshot.forEach((docSnap) => {
+            fsClients.push(docSnap.data() as Client);
+          });
+          set({ clients: fsClients });
+          // Sync back to local Dexie
+          await dexieDb.clients.clear();
+          await dexieDb.clients.bulkAdd(fsClients);
+        }
+      } catch (err) {
+        console.warn('Firestore load clients note:', err);
+      }
+    }
   },
 
   openCreateClientModal: () => set({ isClientModalOpen: true, editingClient: null }),
@@ -51,10 +73,21 @@ export const useClientStore = create<ClientState>((set, get) => ({
       createdAt: isEdit ? clientData.createdAt || now : now
     };
 
+    // Save locally to Dexie
     if (isEdit) {
-      await db.clients.put(client);
+      await dexieDb.clients.put(client);
     } else {
-      await db.clients.add(client);
+      await dexieDb.clients.add(client);
+    }
+
+    // Save remotely to Firestore
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await setDoc(doc(firebaseDb, 'users', currentUser.uid, 'clients', client.id), client);
+      } catch (fsErr) {
+        console.warn('Firestore save client note:', fsErr);
+      }
     }
 
     await get().loadClients();
@@ -63,7 +96,17 @@ export const useClientStore = create<ClientState>((set, get) => ({
   },
 
   deleteClient: async (id) => {
-    await db.clients.delete(id);
+    await dexieDb.clients.delete(id);
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await deleteDoc(doc(firebaseDb, 'users', currentUser.uid, 'clients', id));
+      } catch (fsErr) {
+        console.warn('Firestore delete client note:', fsErr);
+      }
+    }
+
     await get().loadClients();
     set({ isClientModalOpen: false, editingClient: null });
     if (get().selectedClient?.id === id) {
