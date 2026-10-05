@@ -44,7 +44,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
   // Local validation error
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const handleSignInSubmit = (e: React.FormEvent) => {
+  const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     clearAuthError();
@@ -54,13 +54,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
       return;
     }
 
-    const result = login(signInIdentifier, signInPassword);
+    const result = await login(signInIdentifier, signInPassword);
     if (result.success && onSuccessLogin) {
       onSuccessLogin();
     }
   };
 
-  const handleSignUpSubmit = (e: React.FormEvent) => {
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     clearAuthError();
@@ -80,7 +80,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
       return;
     }
 
-    signUp({
+    await signUp({
       name: signUpName,
       username: signUpUsername,
       email: signUpEmail,
@@ -88,7 +88,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
     });
   };
 
-  const handleForgotSubmit = (e: React.FormEvent) => {
+  const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     clearAuthError();
@@ -98,10 +98,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
       return;
     }
 
-    sendPasswordResetEmail(forgotEmail);
+    await sendPasswordResetEmail(forgotEmail);
   };
 
-  const handleResetSubmit = (e: React.FormEvent) => {
+  const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     clearAuthError();
@@ -121,7 +121,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccessLogin }) => {
       return;
     }
 
-    resetPassword(pendingResetEmail || forgotEmail, newPassword);
+    await resetPassword(pendingResetEmail || forgotEmail, newPassword);
   };
 
   const handleVerifyNow = () => {
