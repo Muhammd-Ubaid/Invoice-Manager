@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { db } from '../db/database';
+import { db as dexieDb } from '../db/database';
+import { db as firebaseDb, auth, doc, setDoc, deleteDoc, collection, getDocs } from '../firebase';
 import { Invoice, InvoiceStatus, PaymentMethod } from '../types';
 import { calculateInvoiceTotals, generateInvoiceNumber } from '../utils/calculations';
 
@@ -43,8 +44,28 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
   previewInvoice: null,
 
   loadInvoices: async () => {
-    const invoices = await db.invoices.toArray();
-    set({ invoices });
+    // 1. Local Dexie load
+    let localInvoices = await dexieDb.invoices.toArray();
+    set({ invoices: localInvoices });
+
+    // 2. Remote Firestore load if logged in
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        const querySnapshot = await getDocs(collection(firebaseDb, 'users', currentUser.uid, 'invoices'));
+        if (!querySnapshot.empty) {
+          const fsInvoices: Invoice[] = [];
+          querySnapshot.forEach((docSnap) => {
+            fsInvoices.push(docSnap.data() as Invoice);
+          });
+          set({ invoices: fsInvoices });
+          await dexieDb.invoices.clear();
+          await dexieDb.invoices.bulkAdd(fsInvoices);
+        }
+      } catch (err) {
+        console.warn('Firestore load invoices note:', err);
+      }
+    }
   },
 
   setFilterStatus: (status) => set({ filterStatus: status }),
@@ -106,9 +127,18 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
     };
 
     if (isEdit) {
-      await db.invoices.put(newInvoice);
+      await dexieDb.invoices.put(newInvoice);
     } else {
-      await db.invoices.add(newInvoice);
+      await dexieDb.invoices.add(newInvoice);
+    }
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await setDoc(doc(firebaseDb, 'users', currentUser.uid, 'invoices', newInvoice.id), newInvoice);
+      } catch (fsErr) {
+        console.warn('Firestore save invoice note:', fsErr);
+      }
     }
 
     await get().loadInvoices();
@@ -122,13 +152,23 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
   },
 
   deleteInvoice: async (id) => {
-    await db.invoices.delete(id);
+    await dexieDb.invoices.delete(id);
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await deleteDoc(doc(firebaseDb, 'users', currentUser.uid, 'invoices', id));
+      } catch (fsErr) {
+        console.warn('Firestore delete invoice note:', fsErr);
+      }
+    }
+
     await get().loadInvoices();
     set({ isDetailModalOpen: false, selectedInvoice: null, isFormModalOpen: false, editingInvoice: null });
   },
 
   markAsPaid: async (id, paymentMethod, notes) => {
-    const invoice = await db.invoices.get(id);
+    const invoice = await dexieDb.invoices.get(id);
     if (!invoice) return;
 
     const updated: Invoice = {
@@ -139,10 +179,9 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
       updatedAt: new Date().toISOString().split('T')[0]
     };
 
-    await db.invoices.put(updated);
+    await dexieDb.invoices.put(updated);
     
-    // Log payment record
-    await db.payments.add({
+    await dexieDb.payments.add({
       id: `pay-${Date.now()}`,
       invoiceId: id,
       amount: invoice.grandTotal,
@@ -151,12 +190,21 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
       notes
     });
 
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await setDoc(doc(firebaseDb, 'users', currentUser.uid, 'invoices', id), updated);
+      } catch (fsErr) {
+        console.warn('Firestore markAsPaid invoice note:', fsErr);
+      }
+    }
+
     await get().loadInvoices();
     set({ selectedInvoice: updated });
   },
 
   updateStatus: async (id, status) => {
-    const invoice = await db.invoices.get(id);
+    const invoice = await dexieDb.invoices.get(id);
     if (!invoice) return;
 
     const updated: Invoice = {
@@ -165,7 +213,17 @@ export const useInvoiceStore = create<InvoiceState>((set, get) => ({
       updatedAt: new Date().toISOString().split('T')[0]
     };
 
-    await db.invoices.put(updated);
+    await dexieDb.invoices.put(updated);
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        await setDoc(doc(firebaseDb, 'users', currentUser.uid, 'invoices', id), updated);
+      } catch (fsErr) {
+        console.warn('Firestore updateStatus invoice note:', fsErr);
+      }
+    }
+
     await get().loadInvoices();
     if (get().selectedInvoice?.id === id) {
       set({ selectedInvoice: updated });
