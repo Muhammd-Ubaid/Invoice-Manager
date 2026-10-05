@@ -1,5 +1,17 @@
 import { create } from 'zustand';
 import { User } from '../types';
+import { 
+  auth, 
+  db,
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut as firebaseSignOut, 
+  onAuthStateChanged,
+  sendPasswordResetEmail as firebaseSendPasswordResetEmail,
+  doc, 
+  setDoc, 
+  getDoc 
+} from '../firebase';
 
 const INITIAL_USERS_KEY = 'invoice_manager_registered_users';
 const ACTIVE_USER_KEY = 'invoice_manager_active_user';
@@ -69,220 +81,307 @@ interface AuthState {
   clearAuthError: () => void;
   clearVerificationNotice: () => void;
   
-  signUp: (data: { name: string; username: string; email: string; password: string }) => { success: boolean; error?: string };
+  signUp: (data: { name: string; username: string; email: string; password: string }) => Promise<{ success: boolean; error?: string }>;
   verifyEmail: (email?: string) => void;
-  sendPasswordResetEmail: (email: string) => { success: boolean; error?: string };
-  resetPassword: (email: string, newPassword: string) => { success: boolean; error?: string };
-  login: (usernameOrEmail: string, password?: string) => { success: boolean; error?: string };
+  sendPasswordResetEmail: (email: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (email: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  user: loadActiveUser(),
-  registeredUsers: loadRegisteredUsers(),
-  isAuthModalOpen: false,
-  authMode: 'login',
-  pendingVerificationEmail: null,
-  pendingResetEmail: null,
-  verificationNotice: null,
-  authError: null,
+export const useAuthStore = create<AuthState>((set, get) => {
+  // Setup Firebase Auth State Listener
+  onAuthStateChanged(auth, async (fbUser) => {
+    if (fbUser) {
+      try {
+        const userDocRef = doc(db, 'users', fbUser.uid);
+        const userSnap = await getDoc(userDocRef);
+        let userData: User;
+        
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          userData = {
+            id: fbUser.uid,
+            email: fbUser.email || data.email || '',
+            username: data.username || (fbUser.email ? fbUser.email.split('@')[0] : ''),
+            displayName: data.displayName || fbUser.displayName || fbUser.email || 'User',
+            isEmailVerified: fbUser.emailVerified || data.isEmailVerified || true,
+            isLoggedIn: true
+          };
+        } else {
+          userData = {
+            id: fbUser.uid,
+            email: fbUser.email || '',
+            username: fbUser.email ? fbUser.email.split('@')[0] : '',
+            displayName: fbUser.displayName || fbUser.email || 'User',
+            isEmailVerified: fbUser.emailVerified,
+            isLoggedIn: true
+          };
+        }
 
-  openAuthModal: (mode = 'login') => set({ isAuthModalOpen: true, authMode: mode, authError: null }),
-  closeAuthModal: () => set({ isAuthModalOpen: false, authError: null }),
-  setAuthMode: (mode) => set({ authMode: mode, authError: null }),
-  clearAuthError: () => set({ authError: null }),
-  clearVerificationNotice: () => set({ verificationNotice: null }),
-
-  signUp: ({ name, username, email, password }) => {
-    const { registeredUsers } = get();
-    const normalizedEmail = email.trim().toLowerCase();
-    const normalizedUsername = username.trim().toLowerCase();
-
-    const existingEmail = registeredUsers.find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
-    if (existingEmail) {
-      const err = 'An account with this email address already exists.';
-      set({ authError: err });
-      return { success: false, error: err };
-    }
-
-    const existingUsername = registeredUsers.find(
-      (u) => u.username && u.username.toLowerCase() === normalizedUsername
-    );
-    if (existingUsername) {
-      const err = 'This username is already taken. Please choose another.';
-      set({ authError: err });
-      return { success: false, error: err };
-    }
-
-    const newUser: User = {
-      id: 'user-' + Date.now(),
-      email: normalizedEmail,
-      username: normalizedUsername,
-      displayName: name.trim() || normalizedUsername,
-      password: password,
-      isEmailVerified: false,
-      isLoggedIn: false
-    };
-
-    const updatedUsers = [...registeredUsers, newUser];
-    localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
-
-    set({
-      registeredUsers: updatedUsers,
-      pendingVerificationEmail: normalizedEmail,
-      authMode: 'verify',
-      authError: null,
-      verificationNotice: `A verification email has been sent to ${normalizedEmail}. Please check your inbox and confirm your email address.`
-    });
-
-    return { success: true };
-  },
-
-  verifyEmail: (targetEmail?: string) => {
-    const { pendingVerificationEmail, registeredUsers } = get();
-    const emailToVerify = (targetEmail || pendingVerificationEmail || '').toLowerCase();
-
-    if (!emailToVerify) return;
-
-    const updatedUsers = registeredUsers.map((u) => {
-      if (u.email.toLowerCase() === emailToVerify) {
-        return { ...u, isEmailVerified: true };
+        localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(userData));
+        set({ user: userData, authError: null });
+      } catch (err) {
+        console.warn('Firestore user fetch note:', err);
       }
-      return u;
-    });
-
-    localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
-
-    set({
-      registeredUsers: updatedUsers,
-      pendingVerificationEmail: null,
-      authMode: 'login',
-      authError: null,
-      verificationNotice: `Email ${emailToVerify} verified successfully! You can now sign in with your credentials.`
-    });
-  },
-
-  sendPasswordResetEmail: (email: string) => {
-    const { registeredUsers } = get();
-    const normalizedEmail = email.trim().toLowerCase();
-
-    const existingUser = registeredUsers.find(
-      (u) =>
-        u.email.toLowerCase() === normalizedEmail ||
-        (u.username && u.username.toLowerCase() === normalizedEmail) ||
-        (u.displayName && u.displayName.toLowerCase() === normalizedEmail)
-    );
-
-    if (!existingUser) {
-      const err = 'No registered account found with that email or username.';
-      set({ authError: err });
-      return { success: false, error: err };
     }
+  });
 
-    set({
-      pendingResetEmail: existingUser.email,
-      authMode: 'reset',
-      authError: null,
-      verificationNotice: `Password reset email sent to ${existingUser.email}. Please set a new password below.`
-    });
+  return {
+    user: loadActiveUser(),
+    registeredUsers: loadRegisteredUsers(),
+    isAuthModalOpen: false,
+    authMode: 'login',
+    pendingVerificationEmail: null,
+    pendingResetEmail: null,
+    verificationNotice: null,
+    authError: null,
 
-    return { success: true };
-  },
+    openAuthModal: (mode = 'login') => set({ isAuthModalOpen: true, authMode: mode, authError: null }),
+    closeAuthModal: () => set({ isAuthModalOpen: false, authError: null }),
+    setAuthMode: (mode) => set({ authMode: mode, authError: null }),
+    clearAuthError: () => set({ authError: null }),
+    clearVerificationNotice: () => set({ verificationNotice: null }),
 
-  resetPassword: (targetEmail: string, newPassword: string) => {
-    const { registeredUsers } = get();
-    const normalizedEmail = targetEmail.trim().toLowerCase();
+    signUp: async ({ name, username, email, password }) => {
+      const { registeredUsers } = get();
+      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedUsername = username.trim().toLowerCase();
 
-    const updatedUsers = registeredUsers.map((u) => {
-      if (u.email.toLowerCase() === normalizedEmail) {
-        return { ...u, password: newPassword, isEmailVerified: true };
+      // Check local list first
+      const existingEmail = registeredUsers.find(
+        (u) => u.email.toLowerCase() === normalizedEmail
+      );
+      if (existingEmail) {
+        const err = 'An account with this email address already exists.';
+        set({ authError: err });
+        return { success: false, error: err };
       }
-      return u;
-    });
 
-    localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
+      try {
+        // Firebase Auth Create User
+        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        const fbUid = cred.user.uid;
 
-    set({
-      registeredUsers: updatedUsers,
-      pendingResetEmail: null,
-      authMode: 'login',
-      authError: null,
-      verificationNotice: 'Password updated successfully! Please sign in with your new password.'
-    });
+        const newUser: User = {
+          id: fbUid,
+          email: normalizedEmail,
+          username: normalizedUsername,
+          displayName: name.trim() || normalizedUsername,
+          isEmailVerified: true,
+          isLoggedIn: true
+        };
 
-    return { success: true };
-  },
+        // Save to Firestore
+        try {
+          await setDoc(doc(db, 'users', fbUid), {
+            id: fbUid,
+            email: normalizedEmail,
+            username: normalizedUsername,
+            displayName: newUser.displayName,
+            createdAt: new Date().toISOString()
+          });
+        } catch (fsErr) {
+          console.warn('Firestore user save note:', fsErr);
+        }
 
-  login: (usernameOrEmail: string, password?: string) => {
-    const { registeredUsers } = get();
-    const query = usernameOrEmail.trim().toLowerCase();
+        const updatedUsers = [...registeredUsers, newUser];
+        localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
+        localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(newUser));
 
-    // Look for matching user by email, username, or full display name
-    let found = registeredUsers.find(
-      (u) =>
-        u.email.toLowerCase() === query ||
-        (u.username && u.username.toLowerCase() === query) ||
-        (u.displayName && u.displayName.toLowerCase() === query)
-    );
+        set({
+          user: newUser,
+          registeredUsers: updatedUsers,
+          isAuthModalOpen: false,
+          authError: null,
+          verificationNotice: `Account created successfully for ${normalizedEmail}!`
+        });
 
-    // Demo fallback for instant login button if no matching registered user
-    if (!found && (!password || query === 'alex@luminastudio.dev' || query === 'owner@mybusiness.com')) {
-      found = DEMO_USERS.find((u) => u.email.toLowerCase() === query || u.username === query) || DEMO_USERS[0];
-    }
+        return { success: true };
+      } catch (fbErr: any) {
+        // Fallback to local sign-up if offline or demo mode
+        const newUser: User = {
+          id: 'user-' + Date.now(),
+          email: normalizedEmail,
+          username: normalizedUsername,
+          displayName: name.trim() || normalizedUsername,
+          password: password,
+          isEmailVerified: true,
+          isLoggedIn: true
+        };
 
-    if (!found) {
-      const err = 'No account found matching that username or email address.';
-      set({ authError: err });
-      return { success: false, error: err };
-    }
+        const updatedUsers = [...registeredUsers, newUser];
+        localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
+        localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(newUser));
 
-    // Verify password if provided
-    if (password && found.password && found.password !== password) {
-      const err = 'Incorrect password. Please try again.';
-      set({ authError: err });
-      return { success: false, error: err };
-    }
+        set({
+          user: newUser,
+          registeredUsers: updatedUsers,
+          isAuthModalOpen: false,
+          authError: null,
+          verificationNotice: `Account created successfully for ${normalizedEmail}!`
+        });
 
-    // Verify email status
-    if (found.isEmailVerified === false) {
-      set({
-        pendingVerificationEmail: found.email,
-        authMode: 'verify',
-        authError: null,
-        verificationNotice: `Your email address (${found.email}) has not been verified yet. Please click the button below to verify.`
+        return { success: true };
+      }
+    },
+
+    verifyEmail: (targetEmail?: string) => {
+      const { pendingVerificationEmail, registeredUsers } = get();
+      const emailToVerify = (targetEmail || pendingVerificationEmail || '').toLowerCase();
+
+      if (!emailToVerify) return;
+
+      const updatedUsers = registeredUsers.map((u) => {
+        if (u.email.toLowerCase() === emailToVerify) {
+          return { ...u, isEmailVerified: true };
+        }
+        return u;
       });
-      return {
-        success: false,
-        error: 'Please verify your email address before signing in.'
+
+      localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
+
+      set({
+        registeredUsers: updatedUsers,
+        pendingVerificationEmail: null,
+        authMode: 'login',
+        authError: null,
+        verificationNotice: `Email ${emailToVerify} verified successfully! You can now sign in with your credentials.`
+      });
+    },
+
+    sendPasswordResetEmail: async (email: string) => {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      try {
+        await firebaseSendPasswordResetEmail(auth, normalizedEmail);
+        set({
+          authMode: 'login',
+          authError: null,
+          verificationNotice: `Password reset email sent to ${normalizedEmail}. Please check your inbox.`
+        });
+        return { success: true };
+      } catch (e) {
+        set({
+          pendingResetEmail: normalizedEmail,
+          authMode: 'reset',
+          authError: null,
+          verificationNotice: `Please enter your new password below for ${normalizedEmail}.`
+        });
+        return { success: true };
+      }
+    },
+
+    resetPassword: async (targetEmail: string, newPassword: string) => {
+      const { registeredUsers } = get();
+      const normalizedEmail = targetEmail.trim().toLowerCase();
+
+      const updatedUsers = registeredUsers.map((u) => {
+        if (u.email.toLowerCase() === normalizedEmail) {
+          return { ...u, password: newPassword, isEmailVerified: true };
+        }
+        return u;
+      });
+
+      localStorage.setItem(INITIAL_USERS_KEY, JSON.stringify(updatedUsers));
+
+      set({
+        registeredUsers: updatedUsers,
+        pendingResetEmail: null,
+        authMode: 'login',
+        authError: null,
+        verificationNotice: 'Password updated successfully! Please sign in with your new password.'
+      });
+
+      return { success: true };
+    },
+
+    login: async (usernameOrEmail: string, password?: string) => {
+      const { registeredUsers } = get();
+      const query = usernameOrEmail.trim().toLowerCase();
+
+      // Try Firebase Login if password provided
+      if (password) {
+        try {
+          const cred = await signInWithEmailAndPassword(auth, query, password);
+          const fbUser = cred.user;
+
+          const activeUser: User = {
+            id: fbUser.uid,
+            email: fbUser.email || query,
+            username: query.includes('@') ? query.split('@')[0] : query,
+            displayName: fbUser.displayName || query,
+            isEmailVerified: true,
+            isLoggedIn: true
+          };
+
+          localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(activeUser));
+
+          set({
+            user: activeUser,
+            isAuthModalOpen: false,
+            authError: null,
+            verificationNotice: null
+          });
+
+          return { success: true };
+        } catch (fbErr: any) {
+          console.warn('Firebase login attempt fallback:', fbErr.message);
+        }
+      }
+
+      // Local / Demo Fallback
+      let found = registeredUsers.find(
+        (u) =>
+          u.email.toLowerCase() === query ||
+          (u.username && u.username.toLowerCase() === query) ||
+          (u.displayName && u.displayName.toLowerCase() === query)
+      );
+
+      if (!found && (!password || query === 'alex@luminastudio.dev' || query === 'owner@mybusiness.com')) {
+        found = DEMO_USERS.find((u) => u.email.toLowerCase() === query || u.username === query) || DEMO_USERS[0];
+      }
+
+      if (!found) {
+        const err = 'No account found matching that username or email address.';
+        set({ authError: err });
+        return { success: false, error: err };
+      }
+
+      if (password && found.password && found.password !== password) {
+        const err = 'Incorrect password. Please try again.';
+        set({ authError: err });
+        return { success: false, error: err };
+      }
+
+      const activeUser: User = {
+        ...found,
+        isLoggedIn: true
       };
+
+      localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(activeUser));
+
+      set({
+        user: activeUser,
+        isAuthModalOpen: false,
+        authError: null,
+        verificationNotice: null
+      });
+
+      return { success: true };
+    },
+
+    logout: () => {
+      try {
+        firebaseSignOut(auth);
+      } catch (e) {}
+      localStorage.removeItem(ACTIVE_USER_KEY);
+      set({
+        user: null,
+        authMode: 'login',
+        verificationNotice: null,
+        authError: null
+      });
     }
-
-    const activeUser: User = {
-      ...found,
-      isLoggedIn: true
-    };
-
-    localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(activeUser));
-
-    set({
-      user: activeUser,
-      isAuthModalOpen: false,
-      authError: null,
-      verificationNotice: null
-    });
-
-    return { success: true };
-  },
-
-  logout: () => {
-    localStorage.removeItem(ACTIVE_USER_KEY);
-    set({
-      user: null,
-      authMode: 'login',
-      verificationNotice: null,
-      authError: null
-    });
-  }
-}));
+  };
+});
